@@ -500,11 +500,11 @@
 
   var STORAGE_KEY = "ahp-policy-matrix-records-v1";
   var REMOTE_URL = "https://ntfy.sh/ahp-judgment-3406zx-7d31";
-  var REMOTE_READ_URL = REMOTE_URL + "/json?poll=1&since=all";
+  var REMOTE_SSE_URL = REMOTE_URL + "/sse?since=all";
   var PUBLIC_STUDENT_URL = "https://3406zx.github.io/ahp-judgment-class/";
   var PUBLIC_TEACHER_URL = "https://3406zx.github.io/ahp-judgment-class/?role=teacher";
-  var POLL_MS = 2500;
-  var remotePollTimer = null;
+  var remoteSource = null;
+  var remoteErrorCount = 0;
   var state = [1, 1, 1];
   var toastTimer = null;
   var liveConnected = false;
@@ -751,18 +751,6 @@
     }).catch(function(){});
   }
 
-  function fetchEvents(){
-    return fetch(REMOTE_READ_URL, { cache: "no-store" }).then(function(res){
-      if(!res.ok) throw new Error("read " + res.status);
-      return res.text();
-    }).then(function(text){
-      if(!text || !text.trim()) return [];
-      return text.trim().split(/\r?\n/).map(function(line){
-        try{ return JSON.parse(line); }catch(e){ return null; }
-      }).filter(Boolean);
-    });
-  }
-
   function applyEvent(event){
     var data = event;
     if(event && typeof event.message === "string"){
@@ -789,27 +777,49 @@
   }
 
   function connectLive(){
-    function poll(){
-      fetchEvents().then(function(events){
-        events.forEach(applyEvent);
-        liveConnected = true;
-        setLiveStatus("online", "实时已连接");
-        applyPhaseUI();
-        if(currentView === "teacher"){
-          renderTeacher();
-          refreshMatrixModal();
-        }
-      }).catch(function(){
+    if(remoteSource) remoteSource.close();
+    remoteErrorCount = 0;
+    remoteSource = new EventSource(REMOTE_SSE_URL);
+
+    remoteSource.onopen = function(){
+      liveConnected = true;
+      remoteErrorCount = 0;
+      setLiveStatus("online", "实时已连接");
+      applyPhaseUI();
+      if(!isTeacherPage) sendLiveNow(false);
+      if(currentView === "teacher"){
+        renderTeacher();
+        refreshMatrixModal();
+      }
+    };
+
+    remoteSource.onmessage = function(event){
+      try{
+        applyEvent(JSON.parse(event.data));
+      }catch(e){
+        return;
+      }
+      liveConnected = true;
+      remoteErrorCount = 0;
+      setLiveStatus("online", "实时已连接");
+      applyPhaseUI();
+      if(currentView === "teacher"){
+        renderTeacher();
+        refreshMatrixModal();
+      }
+    };
+
+    remoteSource.onerror = function(){
+      remoteErrorCount += 1;
+      if(remoteErrorCount >= 3){
         liveConnected = false;
         setLiveStatus("offline", "实时连接中断");
-        if(currentView === "teacher"){
-          renderTeacher();
-          refreshMatrixModal();
-        }
-      });
-    }
-    poll();
-    remotePollTimer = setInterval(poll, POLL_MS);
+      }
+      if(currentView === "teacher"){
+        renderTeacher();
+        refreshMatrixModal();
+      }
+    };
   }
 
   function fmt(v, digits){
