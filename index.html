@@ -499,6 +499,12 @@
   };
 
   var STORAGE_KEY = "ahp-policy-matrix-records-v1";
+  var REMOTE_URL = "https://ntfy.sh/ahp-judgment-3406zx-7d31";
+  var REMOTE_READ_URL = REMOTE_URL + "/json?poll=1&since=all";
+  var PUBLIC_STUDENT_URL = "https://3406zx.github.io/ahp-judgment-class/";
+  var PUBLIC_TEACHER_URL = "https://3406zx.github.io/ahp-judgment-class/?role=teacher";
+  var POLL_MS = 2500;
+  var remotePollTimer = null;
   var state = [1, 1, 1];
   var toastTimer = null;
   var liveConnected = false;
@@ -693,11 +699,7 @@
   function sendLiveNow(submitted){
     if(!liveConnected || isTeacherPage) return;
     var payload = buildLiveRecord(submitted);
-    fetch("/api/live", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).catch(function(){});
+    publishEvent({ type: "upsert", record: payload });
   }
 
   function queueSendLive(){
@@ -734,60 +736,80 @@
     applyPhaseUI();
     if(currentView === "teacher") renderTeacher();
     if(!liveConnected) return;
-    fetch("/api/phase", {
+    publishEvent({ type: "phase", phase: next });
+  }
+
+  function publishEvent(event){
+    event.at = new Date().toISOString();
+    return fetch(REMOTE_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phase: next })
+      headers: { "Content-Type": "application/json", "Title": "ahp-event" },
+      body: JSON.stringify(event)
+    }).then(function(res){
+      if(!res.ok) throw new Error("publish " + res.status);
+      return res.json();
     }).catch(function(){});
   }
 
+  function fetchEvents(){
+    return fetch(REMOTE_READ_URL, { cache: "no-store" }).then(function(res){
+      if(!res.ok) throw new Error("read " + res.status);
+      return res.text();
+    }).then(function(text){
+      if(!text || !text.trim()) return [];
+      return text.trim().split(/\r?\n/).map(function(line){
+        try{ return JSON.parse(line); }catch(e){ return null; }
+      }).filter(Boolean);
+    });
+  }
+
+  function applyEvent(event){
+    var data = event;
+    if(event && typeof event.message === "string"){
+      try{ data = JSON.parse(event.message); }catch(e){ data = event; }
+    }
+    if(!data || !data.type) return;
+    if(data.type === "upsert" && data.record && typeof data.record.id === "string"){
+      liveSnapshot = upsertRecord(liveSnapshot, data.record);
+    } else if(data.type === "delete" && typeof data.id === "string"){
+      liveSnapshot = liveSnapshot.filter(function(r){ return r.id !== data.id; });
+    } else if(data.type === "clear"){
+      liveSnapshot = [];
+    } else if(data.type === "phase" && (data.phase === "fill" || data.phase === "check")){
+      livePhase = data.phase;
+    }
+  }
+
+  function upsertRecord(records, rec){
+    for(var i=records.length-1;i>=0;i--){
+      if(records[i].id === rec.id) records.splice(i, 1);
+    }
+    records.unshift(rec);
+    return records;
+  }
+
   function connectLive(){
-    fetch("/api/health").then(function(res){
-      return res.ok ? res.json() : Promise.reject();
-    }).then(function(data){
-      if(data && (data.phase === "fill" || data.phase === "check")){
-        livePhase = data.phase;
-        applyPhaseUI();
-      }
-      var source = new EventSource("/api/events");
-      source.onopen = function(){
+    function poll(){
+      fetchEvents().then(function(events){
+        events.forEach(applyEvent);
         liveConnected = true;
         setLiveStatus("online", "实时已连接");
-        if(!isTeacherPage) sendLiveNow(false);
-        if(currentView === "teacher") renderTeacher();
-      };
-      source.onmessage = function(event){
-        try{
-          var payload = JSON.parse(event.data);
-          if(payload && Array.isArray(payload.records)){
-            liveSnapshot = payload.records;
-          }
-          if(payload && (payload.phase === "fill" || payload.phase === "check")){
-            livePhase = payload.phase;
-          }
-        }catch(e){
-          return;
-        }
         applyPhaseUI();
         if(currentView === "teacher"){
           renderTeacher();
           refreshMatrixModal();
         }
-      };
-      source.onerror = function(){
+      }).catch(function(){
         liveConnected = false;
         setLiveStatus("offline", "实时连接中断");
         if(currentView === "teacher"){
           renderTeacher();
           refreshMatrixModal();
         }
-      };
-    }).catch(function(){
-      liveConnected = false;
-      setLiveStatus("offline", "本地模式");
-      livePhase = "check";
-      applyPhaseUI();
-    });
+      });
+    }
+    poll();
+    remotePollTimer = setInterval(poll, POLL_MS);
   }
 
   function fmt(v, digits){
@@ -1072,11 +1094,7 @@
       btn.addEventListener("click", function(){
         var id = btn.getAttribute("data-del");
         if(liveConnected){
-          fetch("/api/delete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: id })
-          }).catch(function(){});
+          publishEvent({ type: "delete", id: id });
         } else {
           var records2 = getRecords().filter(function(r){ return r.id !== id; });
           saveRecords(records2);
@@ -1133,7 +1151,7 @@
   function clearRecords(){
     if(confirm("确定清空全部学生提交吗？此操作无法撤销。")){
       if(liveConnected){
-        fetch("/api/clear", { method: "POST" }).catch(function(){});
+        publishEvent({ type: "clear" });
       } else {
         saveRecords([]);
         renderTeacher();
@@ -1153,10 +1171,9 @@
   }
 
   function setStudentJoinUrl(){
-    var origin = window.location.origin;
     var el = $("student-join-url");
     if(!el) return;
-    el.textContent = (origin && origin !== "null") ? origin + "/" : "请通过服务器地址打开实时模式";
+    el.textContent = PUBLIC_STUDENT_URL;
   }
 
   function copyJoinUrl(){
