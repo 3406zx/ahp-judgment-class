@@ -207,7 +207,20 @@
     display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
     border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;background:var(--surface);
   }
-  .empty{border:1px dashed var(--line-strong);border-radius:8px;padding:34px 20px;text-align:center;color:var(--muted);font-size:13px;background:var(--surface)}
+  .phase-switch{display:flex;flex-wrap:wrap;gap:8px}
+  .phase-switch .btn{padding:7px 11px;font-size:12px}
+  .phase-switch .btn.active{background:var(--brand);border-color:var(--brand);color:#fff}
+  .compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .compare-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+  .compare-card-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;min-width:0}
+  .compare-card-head strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .compare-card-head span{font-size:12px;color:var(--muted);white-space:nowrap}
+  .compare-card .matrix-open{align-self:flex-start}
+  .compare-meta{display:flex;flex-wrap:wrap;gap:7px}
+  .compare-meta span{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 7px;font-size:12px;color:var(--fg);font-variant-numeric:tabular-nums}
+  .phase-banner.compare{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 35%,var(--line));color:var(--warn)}
+  .phase-banner.compare .phase-dot{background:var(--warn)}
+    .empty{border:1px dashed var(--line-strong);border-radius:8px;padding:34px 20px;text-align:center;color:var(--muted);font-size:13px;background:var(--surface)}
   .record-list{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
   .record-scroll{overflow-x:auto}
   table.records{border-collapse:collapse;width:100%;text-align:left;font-size:13px;min-width:980px}
@@ -416,6 +429,14 @@
         </div>
       </div>
     </section>
+
+    <section id="compare-section" hidden>
+      <div class="section-head">
+        <h2>全班矩阵比较</h2>
+        <p class="section-note">老师已开启比较阶段。点击任意矩阵可以放大查看。</p>
+      </div>
+      <div id="student-compare-content"></div>
+    </section>
   </section>
 
   <section id="teacher-view" role="tabpanel" aria-labelledby="tab-teacher" hidden>
@@ -435,10 +456,11 @@
     </div>
     <div class="phase-control">
       <span class="chip">当前阶段 <b id="teacher-phase-label">填写判断矩阵</b></span>
-      <button class="btn" id="phase-btn" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-        切换到一致性检验
-      </button>
+      <div class="phase-switch" role="group" aria-label="教学阶段切换">
+        <button class="btn active" type="button" data-phase="fill" aria-pressed="true">填写判断矩阵</button>
+        <button class="btn" type="button" data-phase="check" aria-pressed="false">一致性检验</button>
+        <button class="btn" type="button" data-phase="compare" aria-pressed="false">矩阵比较</button>
+      </div>
     </div>
     <div class="teacher-bar">
       <div class="teacher-stats" id="teacher-stats">
@@ -598,7 +620,7 @@
     activeMatrixId = id;
     $("matrix-modal-title").textContent = rec.name + " · " + rec.group;
     var html = largeMatrixHtml(rec.values);
-    if(livePhase === "check"){
+    if(livePhase === "check" || livePhase === "compare"){
       html += '<div class="matrix-modal-summary">' +
         '<span class="chip">德国 <b>' + fmt(rec.weights[0]*100,1) + '%</b></span>' +
         '<span class="chip">英国 <b>' + fmt(rec.weights[1]*100,1) + '%</b></span>' +
@@ -719,28 +741,39 @@
 
   function applyPhaseUI(){
     var check = livePhase === "check";
+    var compare = livePhase === "compare";
     var banner = $("student-phase-banner");
     var text = $("student-phase-text");
-    if(banner && text){
-      banner.className = "phase-banner " + (check ? "check" : "fill");
-      text.textContent = check ? "当前阶段：一致性检验。请查看权重与 CR，必要时回到上方调整判断。" : "当前阶段：填写判断矩阵，先不用考虑对错。";
+    if(banner){
+      banner.className = "phase-banner " + (compare ? "compare" : (check ? "check" : "fill"));
+    }
+    if(text){
+      text.textContent = compare
+        ? "当前阶段：矩阵比较。请查看全班提交的判断矩阵。"
+        : (check
+          ? "当前阶段：一致性检验。请查看权重与 CR，必要时回到上方调整判断。"
+          : "当前阶段：填写判断矩阵，先不用考虑对错。");
     }
     var results = $("results-section");
     if(results) results.hidden = !check;
+    var compareSection = $("compare-section");
+    if(compareSection) compareSection.hidden = !compare;
     var phaseLabel = $("teacher-phase-label");
-    var phaseBtn = $("phase-btn");
-    if(phaseLabel) phaseLabel.textContent = check ? "一致性检验" : "填写判断矩阵";
-    if(phaseBtn){
-      phaseBtn.innerHTML = check
-        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>切回填写阶段'
-        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>切换到一致性检验';
-    }
+    if(phaseLabel) phaseLabel.textContent = compare ? "矩阵比较" : (check ? "一致性检验" : "填写判断矩阵");
+    var buttons = document.querySelectorAll("[data-phase]");
+    Array.prototype.forEach.call(buttons, function(btn){
+      var active = btn.getAttribute("data-phase") === livePhase;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
     var stats = $("teacher-stats");
-    if(stats) stats.style.display = check ? "flex" : "none";
+    if(stats) stats.style.display = (check || compare) ? "flex" : "none";
+    if(compare && compareSection){
+      renderCompareView($("student-compare-content"), compareRecords(), false);
+    }
   }
-
   function setPhase(next){
-    if(next !== "fill" && next !== "check") return;
+    if(next !== "fill" && next !== "check" && next !== "compare") return;
     livePhase = next;
     applyPhaseUI();
     if(currentView === "teacher") renderTeacher();
@@ -773,7 +806,7 @@
       liveSnapshot = liveSnapshot.filter(function(r){ return r.id !== data.id; });
     } else if(data.type === "clear"){
       liveSnapshot = [];
-    } else if(data.type === "phase" && (data.phase === "fill" || data.phase === "check")){
+    } else if(data.type === "phase" && (data.phase === "fill" || data.phase === "check" || data.phase === "compare")){
       livePhase = data.phase;
     }
   }
@@ -794,7 +827,7 @@
     if(data && Object.prototype.hasOwnProperty.call(data, "records")){
       liveSnapshot = Array.isArray(data.records) ? data.records : [];
     }
-    if(data && (data.phase === "fill" || data.phase === "check")){
+    if(data && (data.phase === "fill" || data.phase === "check" || data.phase === "compare")){
       livePhase = data.phase;
     }
   }
@@ -1066,6 +1099,10 @@
     if(isTeacherPage){
       $("tab-student").style.display = "none";
       $("tab-teacher").setAttribute("aria-selected", "true");
+    } else if(window.location.protocol === "file:"){
+      $("tab-student").style.display = "";
+      $("tab-teacher").style.display = "";
+      $("tab-student").setAttribute("aria-selected", "true");
     } else {
       $("tab-teacher").style.display = "none";
       $("tab-student").setAttribute("aria-selected", "true");
@@ -1136,28 +1173,70 @@
     showToast("已清空为同等重要", "ok");
   }
 
-  function renderTeacher(){
-    var records = currentRecords();
-    $("record-count").textContent = records.length;
+  function compareRecords(){
+    return currentRecords().filter(function(rec){ return rec.submitted !== false; });
+  }
 
+  function updateAverageStats(records){
+    var de = $("avg-de"), uk = $("avg-uk"), my = $("avg-my");
+    if(!de || !uk || !my) return;
     if(records.length === 0){
-      $("avg-de").textContent = "—";
-      $("avg-uk").textContent = "—";
-      $("avg-my").textContent = "—";
-      var emptyText = liveConnected ? "等待学生加入，他们的判断矩阵会实时出现在这里。" : "还没有学生提交。请切换到“学生填写”并提交一份判断矩阵。";
-      $("teacher-content").innerHTML = '<div class="empty">' + emptyText + '</div>';
+      de.textContent = "—";
+      uk.textContent = "—";
+      my.textContent = "—";
       return;
     }
-
     var totals = [0,0,0];
     records.forEach(function(rec){
       totals[0] += rec.weights[0];
       totals[1] += rec.weights[1];
       totals[2] += rec.weights[2];
     });
-    $("avg-de").textContent = fmt(totals[0]/records.length*100, 1) + "%";
-    $("avg-uk").textContent = fmt(totals[1]/records.length*100, 1) + "%";
-    $("avg-my").textContent = fmt(totals[2]/records.length*100, 1) + "%";
+    de.textContent = fmt(totals[0]/records.length*100, 1) + "%";
+    uk.textContent = fmt(totals[1]/records.length*100, 1) + "%";
+    my.textContent = fmt(totals[2]/records.length*100, 1) + "%";
+  }
+
+  function compareCardHtml(rec){
+    return '<article class="compare-card">' +
+      '<div class="compare-card-head"><strong>' + escapeHtml(rec.name) + '</strong><span>' + escapeHtml(rec.group || "—") + '</span></div>' +
+      '<div class="matrix-open" data-id="' + rec.id + '" role="button" tabindex="0" aria-label="放大 ' + escapeHtml(rec.name) + ' 的判断矩阵">' + miniMatrixHtml(rec.values) + '</div>' +
+      '<div class="compare-meta">' +
+        '<span>德国 <b>' + fmt(rec.weights[0]*100,1) + '%</b></span>' +
+        '<span>英国 <b>' + fmt(rec.weights[1]*100,1) + '%</b></span>' +
+        '<span>马来西亚 <b>' + fmt(rec.weights[2]*100,1) + '%</b></span>' +
+        '<span>λ<sub>max</sub> <b>' + fmt(rec.lambdaMax) + '</b></span>' +
+        '<span>CR <b>' + fmt(rec.cr) + '</b></span>' +
+      '</div>' +
+    '</article>';
+  }
+
+  function renderCompareCards(container, records){
+    if(!container) return;
+    if(records.length === 0){
+      container.innerHTML = '<div class="empty">暂时没有学生提交，还不能比较。</div>';
+      return;
+    }
+    var html = '<div class="compare-grid">';
+    records.forEach(function(rec){
+      html += compareCardHtml(rec);
+    });
+    html += '</div>';
+    container.innerHTML = html;
+  }
+
+  function renderCompareView(container, records, isTeacher){
+    renderCompareCards(container, records);
+  }
+
+  function renderTeacherList(container, records){
+    if(records.length === 0){
+      var emptyText = liveConnected
+        ? "等待学生加入，他们的判断矩阵会实时出现在这里。"
+        : "还没有学生提交。请切换到“学生填写”并提交一份判断矩阵。";
+      container.innerHTML = '<div class="empty">' + emptyText + '</div>';
+      return;
+    }
 
     var showResults = livePhase === "check";
     var tableClass = "records" + (showResults ? "" : " compact");
@@ -1191,9 +1270,9 @@
       '</div></td></tr>';
     });
     html += '</tbody></table></div></div>';
-    $("teacher-content").innerHTML = html;
+    container.innerHTML = html;
 
-    var delButtons = document.querySelectorAll("[data-del]");
+    var delButtons = container.querySelectorAll("[data-del]");
     Array.prototype.forEach.call(delButtons, function(btn){
       btn.addEventListener("click", function(){
         var id = btn.getAttribute("data-del");
@@ -1207,6 +1286,20 @@
         }
       });
     });
+  }
+
+  function renderTeacher(){
+    var records = currentRecords();
+    if(livePhase === "compare"){
+      records = compareRecords();
+    }
+    $("record-count").textContent = records.length;
+    updateAverageStats(records);
+    if(livePhase === "compare"){
+      renderCompareCards($("teacher-content"), records);
+    } else {
+      renderTeacherList($("teacher-content"), records);
+    }
   }
 
   function escapeHtml(str){
@@ -1320,8 +1413,10 @@
   $("student-name").addEventListener("input", queueSendLive);
   $("student-group").addEventListener("input", queueSendLive);
   $("copy-join-btn").addEventListener("click", copyJoinUrl);
-  $("phase-btn").addEventListener("click", function(){
-    setPhase(livePhase === "check" ? "fill" : "check");
+  Array.prototype.forEach.call(document.querySelectorAll("[data-phase]"), function(btn){
+    btn.addEventListener("click", function(){
+      setPhase(btn.getAttribute("data-phase"));
+    });
   });
   $("matrix-modal-close").addEventListener("click", closeMatrixModal);
   $("matrix-modal").addEventListener("click", function(e){
@@ -1352,7 +1447,7 @@
     connectLive();
   } else {
     setLiveStatus("offline", "本地模式");
-    livePhase = "check";
+    livePhase = "fill";
     applyPhaseUI();
   }
 })();
