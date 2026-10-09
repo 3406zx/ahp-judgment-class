@@ -367,6 +367,22 @@
         </div>
       </div>
     </section>
+          <div class="actions">
+        <button class="btn btn-primary" id="submit-btn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          提交本次判断
+        </button>
+        <button class="btn" id="example-btn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.5 4.5L6 9l4.5 1.5L12 15l1.5-4.5L18 9l-4.5-1.5L12 3Z"/><path d="m5 17 .8 2.2L8 20l-2.2.8L5 23l-.8-2.2L2 20l2.2-.8L5 17Z"/></svg>
+          填入示例
+        </button>
+        <button class="btn btn-ghost" id="reset-btn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+          清空
+        </button>
+      </div>
+
+
 
     <section id="results-section">
       <div class="section-head">
@@ -393,20 +409,6 @@
             </div>
           </div>
           <div class="verdict" id="verdict"></div>
-          <div class="actions">
-            <button class="btn btn-primary" id="submit-btn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-              提交本次判断
-            </button>
-            <button class="btn" id="example-btn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.5 4.5L6 9l4.5 1.5L12 15l1.5-4.5L18 9l-4.5-1.5L12 3Z"/><path d="m5 17 .8 2.2L8 20l-2.2.8L5 23l-.8-2.2L2 20l2.2-.8L5 17Z"/></svg>
-              填入示例
-            </button>
-            <button class="btn btn-ghost" id="reset-btn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-              清空
-            </button>
-          </div>
         </div>
         <div>
           <h2>权重结果</h2>
@@ -501,10 +503,17 @@
   var STORAGE_KEY = "ahp-policy-matrix-records-v1";
   var REMOTE_URL = "https://ntfy.sh/ahp-judgment-3406zx-7d31";
   var REMOTE_SSE_URL = REMOTE_URL + "/sse?since=all";
+  var REMOTE_FALLBACK_URL = "https://api.restful-api.dev/objects/ff808181a09d98f701a1207b36a72cef";
+  var POLL_MS = 2500;
   var PUBLIC_STUDENT_URL = "https://3406zx.github.io/ahp-judgment-class/";
   var PUBLIC_TEACHER_URL = "https://3406zx.github.io/ahp-judgment-class/?role=teacher";
   var remoteSource = null;
   var remoteErrorCount = 0;
+  var remoteUsingFallback = false;
+  var remotePollTimer = null;
+  var remoteFallbackFailCount = 0;
+  var remoteWriteBusy = false;
+  var remoteSentInitial = false;
   var state = [1, 1, 1];
   var toastTimer = null;
   var liveConnected = false;
@@ -741,6 +750,7 @@
 
   function publishEvent(event){
     event.at = new Date().toISOString();
+    if(remoteUsingFallback) return mutateFallback(event);
     return fetch(REMOTE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Title": "ahp-event" },
@@ -776,9 +786,90 @@
     return records;
   }
 
+  function applyFallbackPayload(payload){
+    var data = payload && payload.data ? payload.data : payload;
+    if(typeof data === "string"){
+      try{ data = JSON.parse(data); }catch(e){ data = payload; }
+    }
+    if(data && Object.prototype.hasOwnProperty.call(data, "records")){
+      liveSnapshot = Array.isArray(data.records) ? data.records : [];
+    }
+    if(data && (data.phase === "fill" || data.phase === "check")){
+      livePhase = data.phase;
+    }
+  }
+
+  function fetchFallback(){
+    return fetch(REMOTE_FALLBACK_URL + "?ts=" + Date.now(), { cache: "no-store" }).then(function(res){
+      if(!res.ok) throw new Error("fallback read " + res.status);
+      return res.json();
+    });
+  }
+
+  function mutateFallback(event){
+    if(remoteWriteBusy) return Promise.resolve();
+    remoteWriteBusy = true;
+    applyEvent(event);
+    return fetch(REMOTE_FALLBACK_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ahp-class", data: { phase: livePhase, records: liveSnapshot } })
+    }).then(function(res){
+      if(!res.ok) throw new Error("fallback write " + res.status);
+      return res.json();
+    }).catch(function(){}).finally(function(){
+      remoteWriteBusy = false;
+    });
+  }
+
+  function startFallbackPolling(){
+    if(remotePollTimer) return;
+    if(remoteSource){
+      remoteSource.close();
+      remoteSource = null;
+    }
+    remoteUsingFallback = true;
+    function poll(){
+      fetchFallback().then(function(payload){
+        applyFallbackPayload(payload);
+        liveConnected = true;
+        remoteFallbackFailCount = 0;
+        setLiveStatus("online", "实时已连接（备用通道）");
+        applyPhaseUI();
+        if(!isTeacherPage && !remoteSentInitial){
+          remoteSentInitial = true;
+          sendLiveNow(false);
+        }
+        if(currentView === "teacher"){
+          renderTeacher();
+          refreshMatrixModal();
+        }
+      }).catch(function(){
+        remoteFallbackFailCount += 1;
+        if(remoteFallbackFailCount >= 3){
+          liveConnected = false;
+          setLiveStatus("offline", "实时连接中断");
+        }
+        if(currentView === "teacher"){
+          renderTeacher();
+          refreshMatrixModal();
+        }
+      });
+    }
+    poll();
+    remotePollTimer = setInterval(poll, POLL_MS);
+  }
+
   function connectLive(){
+    if(remotePollTimer){
+      clearInterval(remotePollTimer);
+      remotePollTimer = null;
+    }
     if(remoteSource) remoteSource.close();
+    remoteUsingFallback = false;
     remoteErrorCount = 0;
+    remoteFallbackFailCount = 0;
+    remoteWriteBusy = false;
     remoteSource = new EventSource(REMOTE_SSE_URL);
 
     remoteSource.onopen = function(){
@@ -786,7 +877,10 @@
       remoteErrorCount = 0;
       setLiveStatus("online", "实时已连接");
       applyPhaseUI();
-      if(!isTeacherPage) sendLiveNow(false);
+      if(!isTeacherPage){
+        remoteSentInitial = true;
+        sendLiveNow(false);
+      }
       if(currentView === "teacher"){
         renderTeacher();
         refreshMatrixModal();
@@ -811,9 +905,9 @@
 
     remoteSource.onerror = function(){
       remoteErrorCount += 1;
-      if(remoteErrorCount >= 3){
-        liveConnected = false;
-        setLiveStatus("offline", "实时连接中断");
+      if(remoteErrorCount >= 3 && !remoteUsingFallback){
+        setLiveStatus("offline", "正在切换备用通道");
+        startFallbackPolling();
       }
       if(currentView === "teacher"){
         renderTeacher();
