@@ -177,6 +177,30 @@
   .bar-fill{height:100%;border-radius:5px;min-width:3px;transition:width .25s ease}
   .bar-pct{font-size:13px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
 
+  .consistency-learn{margin-top:24px}
+  .learn-steps{display:grid;grid-template-columns:1fr;gap:12px}
+  .learn-step{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .learn-step-head{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .learn-step-num{
+    width:22px;height:22px;flex:0 0 22px;display:inline-grid;place-items:center;border-radius:6px;
+    background:var(--brand-soft);color:var(--brand-strong);font-size:12px;font-weight:600;
+  }
+  .learn-step h3{font-size:13px;font-weight:600;margin:0}
+  .learn-formula{display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-family:"Cambria Math","Times New Roman",serif;font-size:14px;margin:10px 0 0;font-variant-numeric:tabular-nums}
+  .learn-formula .fraction{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 3px;line-height:1.15}
+  .learn-formula .fraction > span{display:block;text-align:center;padding:2px 7px}
+  .learn-formula .frac-top{border-bottom:1px solid currentColor}
+  .learn-explain{margin:10px 0 0;font-size:12px;color:var(--muted);line-height:1.65}
+  .learn-explain strong{color:var(--fg);font-weight:600}
+  .learn-values{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+  .learn-value{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;font-variant-numeric:tabular-nums}
+  .learn-value b{font-weight:600}
+  .step-matrix-scroll{overflow-x:auto}
+  table.step-matrix{border-collapse:collapse;width:100%;min-width:250px;text-align:center;font-size:12px}
+  .step-matrix th,.step-matrix td{border:1px solid var(--line);padding:7px 8px;background:var(--surface)}
+  .step-matrix th{background:var(--bg);color:var(--muted);font-weight:600}
+  .step-matrix td{font-variant-numeric:tabular-nums}
+
   .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
   .btn{
     display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-strong);
@@ -427,6 +451,13 @@
           <h2>权重结果</h2>
           <div class="bar-chart" id="weight-chart" aria-label="方案权重条形图"></div>
         </div>
+      </div>
+      <div class="consistency-learn">
+        <div class="section-head">
+          <h2>一致性检验步骤</h2>
+          <p class="section-note">用你自己的判断矩阵，跟着下面的步骤理解 λmax、CI 和 CR 是怎样得到的。</p>
+        </div>
+        <div class="learn-steps" id="consistency-steps"></div>
       </div>
     </section>
 
@@ -692,11 +723,12 @@
     var A = matrix();
     var w = eigen(A);
     var Av = matVec(A, w);
-    var lambdaMax = (Av[0]+Av[1]+Av[2]) / (w[0]+w[1]+w[2]);
+    var ratios = w.map(function(weight, i){ return Av[i] / weight; });
+    var lambdaMax = (ratios[0]+ratios[1]+ratios[2]) / 3;
     var n = 3;
     var ci = (lambdaMax - n) / (n - 1);
     var cr = ci / 0.58;
-    return { w:w, lambdaMax:lambdaMax, ci:ci, cr:cr };
+    return { A:A, w:w, Aw:Av, ratios:ratios, lambdaMax:lambdaMax, ci:ci, cr:cr };
   }
 
   function currentRecords(){
@@ -1016,6 +1048,72 @@
     holder.innerHTML = html;
   }
 
+  function stepMatrixHtml(A){
+    var names = ["德国","英国","马来西亚"];
+    var html = '<div class="step-matrix-scroll"><table class="step-matrix"><tbody>';
+    html += '<tr><th></th><th>德国</th><th>英国</th><th>马来西亚</th></tr>';
+    for(var i=0;i<3;i++){
+      html += '<tr><th>' + names[i] + '</th>';
+      for(var j=0;j<3;j++){
+        html += '<td>' + fracDisplay(A[i][j]) + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  function renderConsistencySteps(){
+    var holder = $("consistency-steps");
+    if(!holder) return;
+    var r = calc();
+    var names = ["德国","英国","马来西亚"];
+    var html = '';
+
+    html += '<article class="learn-step"><div class="learn-step-head"><span class="learn-step-num">1</span><h3>写出完整判断矩阵</h3></div>' +
+      '<p class="section-note">对角线为 1，下三角是上三角对应位置的倒数。</p>' + stepMatrixHtml(r.A) +
+      '<p class="learn-explain"><strong>A</strong> 是判断矩阵，元素 <strong>a<sub>ij</sub></strong> 表示指标 i 相对指标 j 的重要程度。对角线表示自己与自己比较，因此为 1；下三角是上三角的倒数，保证互反关系。</p></article>';
+
+    html += '<article class="learn-step"><div class="learn-step-head"><span class="learn-step-num">2</span><h3>计算权重向量 w</h3></div>' +
+      '<p class="learn-formula"><span>w =</span><span>[ w₁ , w₂ , w₃ ]</span></p><div class="learn-values">';
+    r.w.forEach(function(weight, i){
+      html += '<span class="learn-value">' + names[i] + ' <b>' + fmt(weight, 4) + '</b></span>';
+    });
+    html += '</div>' +
+      '<p class="learn-explain"><strong>w</strong> 表示三个指标的相对权重，三个分量之和约等于 1。这里采用特征向量法：先求判断矩阵的主特征向量，再归一化得到权重。数值越大，说明该指标在判断中越重要。</p></article>';
+
+    html += '<article class="learn-step"><div class="learn-step-head"><span class="learn-step-num">3</span><h3>计算加权和 Aw</h3></div>' +
+      '<p class="learn-formula"><span>Aw</span><span>=</span><span>A</span><span>×</span><span>w</span></p><div class="learn-values">';
+    r.Aw.forEach(function(val, i){
+      html += '<span class="learn-value">Aw<sub>' + (i+1) + '</sub> = <b>' + fmt(val, 4) + '</b></span>';
+    });
+    html += '</div>' +
+      '<p class="learn-explain"><strong>Aw</strong> 是判断矩阵 A 与权重向量 w 的乘积。它把每个指标按照当前权重进行加权，用来判断当前权重是否与原始判断相吻合。</p></article>';
+
+    html += '<article class="learn-step"><div class="learn-step-head"><span class="learn-step-num">4</span><h3>计算最大特征值 λmax</h3></div>' +
+      '<p class="learn-formula"><span>λ<sub>max</sub> =</span>' +
+      '<span class="fraction"><span class="frac-top">1</span><span class="frac-bottom">3</span></span>' +
+      '<span>× Σ</span>' +
+      '<span class="fraction"><span class="frac-top">Aw<sub>i</sub></span><span class="frac-bottom">w<sub>i</sub></span></span></p><div class="learn-values">';
+    r.ratios.forEach(function(ratio, i){
+      html += '<span class="learn-value">λ<sub>' + (i+1) + '</sub> = <b>' + fmt(ratio, 4) + '</b></span>';
+    });
+    html += '<span class="learn-value">λmax = <b>' + fmt(r.lambdaMax, 4) + '</b></span></div>' +
+      '<p class="learn-explain"><strong>λmax</strong> 是最大特征值。完全一致的判断矩阵应有 λmax = n；λmax 越大于 n，说明判断之间的逻辑矛盾越明显。</p></article>';
+
+    html += '<article class="learn-step"><div class="learn-step-head"><span class="learn-step-num">5</span><h3>计算 CI、RI 和 CR</h3></div>' +
+      '<p class="learn-formula"><span>CI =</span>' +
+      '<span class="fraction"><span class="frac-top">λ<sub>max</sub> − n</span><span class="frac-bottom">n − 1</span></span>' +
+      '<span>= <b>' + fmt(r.ci, 4) + '</b></span></p>' +
+      '<p class="learn-formula"><span>RI = 0.58</span></p>' +
+      '<p class="learn-formula"><span>CR =</span>' +
+      '<span class="fraction"><span class="frac-top">CI</span><span class="frac-bottom">RI</span></span>' +
+      '<span>= <b>' + fmt(r.cr, 4) + '</b></span></p>' +
+      '<p class="learn-explain"><strong>CI</strong> 表示判断矩阵偏离完全一致性的程度，越小越好。<strong>RI</strong> 是随机一致性指标，用来消除矩阵阶数的影响。<strong>CR = CI / RI</strong> 是标准化后的比值，一般 CR 小于 0.10 时认为通过一致性检验。</p></article>';
+
+    holder.innerHTML = html;
+  }
+
   function renderResults(){
     var r = calc();
     $("lambda-max").textContent = fmt(r.lambdaMax);
@@ -1048,6 +1146,7 @@
         '<div class="bar-pct">' + fmt(pct, 1) + '%</div>';
       chart.appendChild(row);
     });
+    renderConsistencySteps();
   }
 
   function render(){
